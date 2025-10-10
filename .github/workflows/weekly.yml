@@ -10,4 +10,4 @@ jobs:
       - run: |
           curl -fsSL \
             -H "x-job-token: ${{ secrets.JOB_TOKEN }}" \
-            "https://line-news-bot-7bh8.onrender.com/broadcast-weekly?to=C298a2650040497cb73c8162977e559ab"
+            "https://line-news-bot-7bh8.onrender.com/broadcast-weekly?to=C9186e28b3a3c77879c647429520b2413"
