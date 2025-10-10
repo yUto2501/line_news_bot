@@ -1,0 +1,19 @@
+{
+  "name": "linebot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@line/bot-sdk": "^10.3.0",
+    "@mozilla/readability": "^0.6.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "jsdom": "^27.0.0",
+    "node-fetch": "^3.3.2",
+    "openai": "^4.57.0",
+    "rss-parser": "^3.13.0",
+    "string-similarity": "^4.0.4"
+  }
+}
