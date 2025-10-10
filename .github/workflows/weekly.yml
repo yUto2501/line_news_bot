@@ -1,33 +1,46 @@
 name: Weekly Broadcast
 on:
   schedule:
-    - cron: "0 9 * * 5"   # JST 18:00
+    - cron: "0 10 * * 5"  # JST 19:00
   workflow_dispatch:
 
 jobs:
   call:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       URL: https://line-news-bot-7bh8.onrender.com
       JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
+
     steps:
-      - name: Warm up (check root)
+      - name: Warm up (wait for Render to wake)
         id: warm
         run: |
-          # ルートに最大5回リトライ。HTTPコードを出力へ
-          CODE=$(curl -sS -m 60 --retry 5 --retry-delay 5 --retry-all-errors \
-                 -w "%{http_code}" "$URL/" -o /dev/null || true)
-          echo "Warmup HTTP $CODE"
-          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "=== Warm-up start ==="
+          ATTEMPTS=0
+          while [ $ATTEMPTS -lt 10 ]; do
+            CODE=$(curl -sS -m 20 -w "%{http_code}" -o /dev/null "$URL/health" || echo "000")
+            echo "Attempt $ATTEMPTS => $CODE"
+            if [ "$CODE" = "200" ]; then
+              echo "Server is awake."
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            ATTEMPTS=$((ATTEMPTS + 1))
+            sleep 10
+          done
+          echo "Server did not wake up in time."
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          exit 1
 
-      - name: Trigger broadcast only if warmup OK
-        if: steps.warm.outputs.code == '200'
+      - name: Trigger broadcast (if warm-up OK)
+        if: steps.warm.outputs.ok == 'true'
         run: |
+          echo "=== Start broadcast ==="
           TARGET="$URL/broadcast-weekly?to=all-groups"
-          CODE=$(curl -sS -m 120 --retry 3 --retry-delay 6 --retry-all-errors \
-                 -H "x-job-token: $JOB_TOKEN" \
-                 -w "%{http_code}" "$TARGET" -o resp.txt || true)
-          echo "Broadcast HTTP $CODE"
-          echo "--- body ---"; cat resp.txt || true; echo "-------------"
-          test "$CODE" -ge 200 -a "$CODE" -lt 300
+          CODE=$(curl -sS -m 900 -H "x-job-token: $JOB_TOKEN" -w "%{http_code}" "$TARGET" -o resp.txt || echo "000")
+          echo "Broadcast response: $CODE"
+          cat resp.txt
+          if [ "$CODE" -lt 200 ] || [ "$CODE" -ge 300 ]; then
+            echo "Broadcast failed"
+            exit 1
+          fi
