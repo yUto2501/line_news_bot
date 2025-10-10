@@ -24,6 +24,7 @@ if (!SPREADSHEET_ID || !SA_EMAIL || !SA_PRIVATE_KEY) {
   console.warn("[GroupsStore] Sheets の環境変数が未設定です。保存は無効になります。");
 }
 
+
 let sheetsClient = null;
 async function getSheets() {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
@@ -996,5 +997,8 @@ app.get("/debug/sheets-auth", async (_req, res) => {
   }
 });
 
+app.get("/health", (req, res) => {
+  res.status(200).send("ok");
+});
 
 app.listen(PORT, () => console.log(`Listening on ${PORT}`));

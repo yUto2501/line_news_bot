@@ -1,7 +1,7 @@
 name: Weekly Broadcast
 on:
   schedule:
-    - cron: "0 10 * * 5"  # JST 19:00
+    - cron: "0 12 * * 5"  # JST 19:00
   workflow_dispatch:
 
 jobs:
