@@ -1,7 +1,8 @@
 name: Weekly Broadcast
 on:
   schedule:
-    - cron: "0 12 * * 5"      # JST 19:00（必要に応じて変更）
+    - cron: "15 15 * * 5" 
+    - cron: "15 45 * * 5" 
   workflow_dispatch:
 
 jobs:
