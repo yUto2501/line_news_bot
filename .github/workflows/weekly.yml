@@ -1,7 +1,7 @@
 name: Weekly Broadcast
 on:
   schedule:
-    - cron: "22 15 * * *" 
+    - cron: "22 22 * * *" 
   workflow_dispatch:
 
 jobs:
