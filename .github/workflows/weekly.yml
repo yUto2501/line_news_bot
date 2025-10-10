@@ -14,14 +14,14 @@ jobs:
     steps:
       - name: Warm up (wake Render)
         run: |
-          curl --retry 5 --retry-delay 5 --retry-all-errors \
+          curl --retry 5 --retry-delay 60 --retry-all-errors \
                -sS -m 60 -w "HTTP %{http_code}\n" "$URL/health" || true
 
       - name: Trigger broadcast
         run: |
           TARGET="$URL/broadcast-weekly?to=all-groups"
           # コールドスタート対策：最大5回リトライ
-          CODE=$(curl --retry 5 --retry-delay 6 --retry-all-errors \
+          CODE=$(curl --retry 5 --retry-delay 60 --retry-all-errors \
                 -H "x-job-token: $JOB_TOKEN" \
                 -sS -m 120 -w "%{http_code}" "$TARGET" \
                 -o resp.txt || true)
