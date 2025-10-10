@@ -18,7 +18,7 @@ import { google } from "googleapis";
 const SPREADSHEET_ID = process.env.SHEETS_SPREADSHEET_ID;
 const SHEET_NAME     = process.env.SHEETS_SHEET_NAME || "groups";
 const SA_EMAIL       = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-const SA_PRIVATE_KEY = (process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || "").replace(/\\n/g, "\n");
+const SA_PRIVATE_KEY = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || ""
 
 if (!SPREADSHEET_ID || !SA_EMAIL || !SA_PRIVATE_KEY) {
   console.warn("[GroupsStore] Sheets の環境変数が未設定です。保存は無効になります。");
@@ -26,46 +26,26 @@ if (!SPREADSHEET_ID || !SA_EMAIL || !SA_PRIVATE_KEY) {
 
 let sheetsClient = null;
 async function getSheets() {
-  if (!SPREADSHEET_ID || !SA_EMAIL || !SA_PRIVATE_KEY) return null;
-  if (sheetsClient) return sheetsClient;
-  const auth = new google.auth.JWT(SA_EMAIL, null, SA_PRIVATE_KEY, [
-    "https://www.googleapis.com/auth/spreadsheets",
-  ]);
-  sheetsClient = google.sheets({ version: "v4", auth });
-  // シートが無ければ作る＆ヘッダを整える
-  try {
-    const meta = await sheetsClient.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-    const exists = meta.data.sheets?.some(s => s.properties?.title === SHEET_NAME);
-    if (!exists) {
-      await sheetsClient.spreadsheets.batchUpdate({
-        spreadsheetId: SPREADSHEET_ID,
-        requestBody: { requests: [{ addSheet: { properties: { title: SHEET_NAME } } }] },
-      });
-      await sheetsClient.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A1:D1`,
-        valueInputOption: "RAW",
-        requestBody: { values: [["id", "type", "lastSeen", "isDefault"]] },
-      });
-    } else {
-      // ヘッダが無い場合だけ補填
-      const hdr = await sheetsClient.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID, range: `${SHEET_NAME}!A1:D1`,
-      });
-      const firstRow = hdr.data.values?.[0] || [];
-      if (firstRow.join(",") !== "id,type,lastSeen,isDefault") {
-        await sheetsClient.spreadsheets.values.update({
-          spreadsheetId: SPREADSHEET_ID,
-          range: `${SHEET_NAME}!A1:D1`,
-          valueInputOption: "RAW",
-          requestBody: { values: [["id", "type", "lastSeen", "isDefault"]] },
-        });
-      }
-    }
-  } catch (e) {
-    console.error("[GroupsStore] ensure sheet error:", e?.message || e);
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
+  // どちらのケースも吸収：Renderなどの `\n` / ローカルの実改行 / Windowsの CR を正規化
+  const key = (process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || "")
+    .replace(/\\n/g, "\n")   // 文字列の \n を実改行に
+    .replace(/\r/g, "")      // CR を除去
+    .trim();                 // 前後空白除去
+
+  if (!email || !key || !key.startsWith("-----BEGIN PRIVATE KEY-----")) {
+    throw new Error("Missing/invalid GOOGLE_SERVICE_ACCOUNT_EMAIL or GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY");
   }
-  return sheetsClient;
+
+  // ✅ 非推奨APIを使わず、JWT の“オブジェクト形式”で作る
+  const auth = new google.auth.JWT({
+    email,
+    key,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+
+  await auth.authorize(); // ここでエラーが出なければOK
+  return google.sheets({ version: "v4", auth });
 }
 
 async function readAllRows() {
@@ -147,43 +127,42 @@ async function setDefaultRow(id) {
   }
 }
 
-// === 既存コードで呼んでいたインターフェース互換の関数 ===
-export async function rememberSource(ev) {
+
+
+
+
+async function getAllGroupIds() {
   try {
-    const src = ev?.source?.type;
-    let id = null;
-    if (src === "group") id = ev.source.groupId;
-    else if (src === "room") id = ev.source.roomId;
-    else if (src === "user") id = ev.source.userId;
-    if (!id) return;
+    const api = await getSheets();
+    if (!api) return [];
 
-    const seen = new Date(ev.timestamp || Date.now()).toISOString();
-    await upsertRow(id, src, seen);
+    // A2:D だとデータが無ければ undefined。空配列にフォールバック。
+    const r = await api.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A2:D`,
+    });
 
-    // 既定が未設定なら、最初に見つけた group/room を既定にする
-    const rows = await readAllRows();
-    const hasDefault = rows.some(r => r.isDefault);
-    if (!hasDefault && (src === "group" || src === "room")) {
-      await setDefaultRow(id);
+    const rows = r.data.values || [];
+
+    if (rows.length === 0) {
+      console.warn("[GroupsStore] シートにデータ行がありません（ヘッダーのみ）");
+      return [];
     }
+
+    // A列(ID)が "C" で始まる（グループID）だけ抽出
+    const ids = rows
+      .map(row => row[0])
+      .filter(id => typeof id === "string" && id.startsWith("C"));
+
+    console.log(`[GroupsStore] getAllGroupIds -> ${ids.length}件`);
+    return ids;
   } catch (e) {
-    console.error("[GroupsStore] rememberSource error:", e?.message || e);
+    console.error("[GroupsStore] getAllGroupIds error:", e.message || e);
+    return [];
   }
 }
 
-export async function getDefaultTo() {
-  // 優先：環境変数 → Sheets の isDefault=TRUE → 先頭
-  const envTo = process.env.TEST_GROUP_ID || process.env.DEFAULT_TO;
-  if (envTo) return envTo;
-  const rows = await readAllRows();
-  const def = rows.find(r => r.isDefault);
-  return def?.id || rows[0]?.id || null;
-}
 
-export async function getAllGroupIds() {
-  const rows = await readAllRows();
-  return rows.filter(r => r.type === "group").map(r => r.id);
-}
 
 
 function loadStore() {
@@ -197,31 +176,33 @@ function loadStore() {
 function saveStore(store) {
   fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), "utf-8");
 }
-function rememberSource(ev) {
-  const store = loadStore();
-  const src = ev?.source?.type;
-  let id = null;
-  if (src === "group") id = ev.source.groupId;
-  else if (src === "room") id = ev.source.roomId;
-  else if (src === "user") id = ev.source.userId;
-  if (!id) return;
-
-  store.groups[id] = { type: src, lastSeen: new Date(ev.timestamp || Date.now()).toISOString() };
-  // まだデフォルト未設定なら、最初に見つけた group/room を既定にする
-  if (!store.defaultTo && (src === "group" || src === "room")) {
-    store.defaultTo = id;
+async function rememberSource(ev) {
+  try {
+    const src = ev?.source?.type;
+    let id = null;
+    if (src === "group") id = ev.source.groupId;
+    else if (src === "room") id = ev.source.roomId;
+    else if (src === "user") id = ev.source.userId;
+    if (!id) return;
+    await upsertRow(id, src, new Date(ev.timestamp || Date.now()).toISOString());
+    const rows = await readAllRows();
+    const hasDefault = rows.some(r => r.isDefault);
+    if (!hasDefault && (src === "group" || src === "room")) {
+      await setDefaultRow(id);
+    }
+  } catch (e) {
+    console.error("[GroupsStore] rememberSource error:", e?.message || e);
   }
-  saveStore(store);
 }
-function getDefaultTo() {
-  // 優先順: 環境変数 → ストアのdefault → 最後に groups の先頭
-  const envTo = process.env.GROUP_ID || process.env.DEFAULT_TO;
+
+async function getDefaultTo() {
+  const envTo = process.env.TEST_GROUP_ID || process.env.DEFAULT_TO;
   if (envTo) return envTo;
-  const store = loadStore();
-  if (store.defaultTo) return store.defaultTo;
-  const ids = Object.keys(store.groups || {});
-  return ids[0] || null;
+  const rows = await readAllRows();
+  const def = rows.find(r => r.isDefault);
+  return def?.id || rows[0]?.id || null;
 }
+
 
 
 // 個別記事の本文を抽出（最大 ~8000 文字にトリム）
@@ -668,74 +649,80 @@ function buildFlex(title, items) {
 }
 
 // --- LINE送信テスト用 ---
+// 全グループ or 既定宛先 or 単一ID へテスト送信
 app.get("/test-message", async (req, res) => {
   try {
-    //const to = req.query.to || process.env.TEST_USER_ID; // 宛先（UserIDを.envに書いておくと便利）
-    const to = req.query.to || getDefaultTo();
-    const messages = [
-      { type: "text", text: "🧪 テストメッセージです（LINE Bot 接続確認）" },
-      { type: "text", text: "接続は正常に動作しています ✅" }
-    ];
-    if (to) {
-      await lineClient.pushMessage(to, messages);
+    let targets = [];
+    const toParam = req.query.to;
+
+    if (toParam === "all-groups") {
+      targets = await getAllGroupIds();             // Sheetsにある全グループID
+    } else if (toParam) {
+      targets = [String(toParam)];                  // 明示指定
     } else {
-      await lineClient.broadcast(messages);
+      const def = await getDefaultTo();             // 既定宛先
+      if (def) targets = [def];
     }
-    res.json({ ok: true, to: to || "broadcast", count: messages.length });
+
+    targets = targets.filter(v => typeof v === "string" && v.length > 0);
+    if (!targets.length) return res.status(400).json({ ok:false, error:"no valid target" });
+
+    const messages = [
+      { type: "text", text: "🧪 テストメッセージ（接続確認）" },
+      { type: "text", text: "Sheetsに保存された宛先へ送信 ✅" }
+    ];
+
+    for (const to of targets) {
+      await lineClient.pushMessage(to, messages);
+    }
+    res.json({ ok:true, sent: targets.length, targets });
   } catch (e) {
     console.error("TEST SEND ERROR:", e);
-    res.status(500).json({ ok: false, error: String(e) });
+    res.status(500).json({ ok:false, error:String(e) });
   }
 });
+
 
 
 // ---- エンドポイント ----
 app.get("/broadcast-weekly", async (req, res) => {
   try {
-    const { domestic, overseas } = await collectPicks(req);
+    // 宛先解決
+    let targets = [];
+    const toParam = req.query.to;
+    if (toParam === "all-groups") {
+      targets = await getAllGroupIds();
+    } else if (toParam) {
+      targets = [String(toParam)];
+    } else {
+      const def = await getDefaultTo();
+      if (def) targets = [def];
+    }
+    targets = targets.filter(v => typeof v === "string" && v.length > 0);
+    if (!targets.length) return res.status(400).json({ ok:false, error:"no valid target" });
+
+    // ニュース収集・要約（あなたの既存処理）
+    const { domestic, overseas } = await collectPicks();
     const domSum = await summarizeBatch(domestic);
     const ovrSum = await summarizeBatch(overseas);
 
-    const messages = [{ type: "text", text: `🗞 直近1週間の「${TOPIC}」` }];
-    if (domSum.length) messages.push(buildFlex("国内トピック 5件", domSum));
-    if (ovrSum.length) messages.push(buildFlex("海外トピック 3件", ovrSum));
-    if (messages.length === 1) messages.push({ type: "text", text: "今週は該当記事なし（情報源が不安定）" });
+    const messages = [
+      { type: "text", text: `🗞 直近1週間の「${TOPIC}」` },
+      buildFlex("国内トピック 5件", domSum),
+      buildFlex("海外トピック 3件", ovrSum)
+    ];
 
-    const send = (req.query.send ?? "1") === "1";
-    const toParam = req.query.to;
-
-    let mode = "broadcast";
-    let targets = [];
-
-    if (toParam === "all-groups") {
-      targets = await getAllGroupIds();          // ★ Sheets から全グループ
-      mode = "push:all-groups";
-      if (!targets.length) return res.status(400).json({ ok: false, error: "no saved groups (Sheets)" });
-    } else if (toParam) {
-      targets = [toParam];
-      mode = "push:single";
-    } else {
-      const def = await getDefaultTo();          // ★ Sheets の既定宛先
-      if (def) { targets = [def]; mode = "push:default"; }
-      else { mode = "broadcast"; }
-    }
-
-    if (send) {
-      if (mode.startsWith("push")) {
-        for (const to of targets) {
-          for (const m of messages) await lineClient.pushMessage(to, m);
-          await new Promise(r => setTimeout(r, 150));
-        }
-      } else {
-        await lineClient.broadcast(messages);
+    const doSend = String(req.query.send || "1") !== "0";
+    if (doSend) {
+      for (const to of targets) {
+        await lineClient.pushMessage(to, messages);
       }
     }
 
-    res.json({ ok: true, mode, sent: send, targetsCount: targets.length,
-      domestic: domSum.length, overseas: ovrSum.length });
+    res.json({ ok:true, sent: doSend ? targets.length : 0, targets, domestic: domSum.length, overseas: ovrSum.length });
   } catch (e) {
-    console.error("ERROR /broadcast-weekly:", e?.statusCode || e?.status || "", e?.message || "", e?.body || e?.response?.data || "");
-    res.status(500).json({ ok: false, error: e?.body || e?.message || String(e) });
+    console.error("ERROR /broadcast-weekly:", e);
+    res.status(500).json({ ok:false, error:String(e) });
   }
 });
 
@@ -767,16 +754,16 @@ app.post("/webhook", express.json(), async (req, res) => {
   res.send("ok"); // 先に応答
   for (const ev of events) {
     await rememberSource(ev); // ★ Sheets に記録
-    if (ev.type === "message" && ev.message?.type === "text") {
-      try {
-        await lineClient.replyMessage(ev.replyToken, {
-          type: "text",
-          text: `受け取りました: 「${ev.message.text}」`
-        });
-      } catch (e) {
-        console.error("reply error:", e?.statusCode, e?.body || e?.message);
-      }
-    }
+    //if (ev.type === "message" && ev.message?.type === "text") {
+      //try {
+      //  await lineClient.replyMessage(ev.replyToken, {
+      //    type: "text",
+      //    text: `受け取りました: 「${ev.message.text}」`
+      //  });
+      //} catch (e) {
+      //  console.error("reply error:", e?.statusCode, e?.body || e?.message);
+    //  }
+    //}
   }
 });
 
@@ -836,6 +823,86 @@ app.post("/groups/default", express.json(), async (req, res) => {
   if (!to) return res.status(400).json({ ok: false, error: "to is required" });
   await setDefaultRow(to);
   res.json({ ok: true, defaultTo: to });
+});
+
+app.get("/debug/sheets", async (_req, res) => {
+  try {
+    const s = await getSheets(); // 上でauthorize実行済みの関数
+    if (!s) return res.status(500).json({ ok:false, error:"auth/init failed. Check server logs." });
+    const r = await s.spreadsheets.values.get({
+      spreadsheetId: process.env.SHEETS_SPREADSHEET_ID,
+      range: `${process.env.SHEETS_SHEET_NAME || "groups"}!A1:D2`,
+    });
+    res.json({ ok:true, values: r.data.values || [] });
+  } catch (e) {
+    res.status(500).json({ ok:false, error: e?.message || String(e) });
+  }
+});
+
+// ── 追記：環境変数と鍵の整形を可視化
+app.get("/debug/sheets-env", (_req, res) => {
+  const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || "";
+  const repaired = rawKey.replace(/\\n/g, "\n");
+  const hasBegin = repaired.startsWith("-----BEGIN PRIVATE KEY-----");
+  const hasEnd   = repaired.trim().endsWith("-----END PRIVATE KEY-----");
+  res.json({
+    ok: true,
+    SHEETS_SPREADSHEET_ID: process.env.SHEETS_SPREADSHEET_ID || null,
+    GOOGLE_SERVICE_ACCOUNT_EMAIL: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || null,
+    KEY_present: !!rawKey,
+    KEY_has_BEGIN: hasBegin,
+    KEY_has_END: hasEnd,
+    KEY_starts_with_charCode: repaired.charCodeAt(0) || null, // 45('-')であるべき
+    note: "KEY はレスポンスに含めません（安全のため）。BEGIN/END 判定だけ返しています。"
+  });
+});
+
+
+
+app.get("/debug/sheets-auth", async (_req, res) => {
+  try {
+    const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
+    const raw   = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || "";
+    // ローカルが“実改行”なら raw のまま、Render の \n の場合は下の行で置換して試す
+    const keyA  = raw;                       // 実改行想定
+    const keyB  = raw.replace(/\\n/g, "\n"); // \n→改行想定
+
+    const diag = {
+      email,
+      raw_len: raw.length,
+      A_has_BEGIN: keyA.startsWith("-----BEGIN PRIVATE KEY-----"),
+      B_has_BEGIN: keyB.startsWith("-----BEGIN PRIVATE KEY-----"),
+    };
+    if (!email || !raw) {
+      return res.status(500).json({ ok:false, step:"env", error:"missing email or key", diag });
+    }
+
+    // まず GoogleAuth + keyA で試す
+    try {
+      const auth = new google.auth.GoogleAuth({
+        credentials: { client_email: email, private_key: keyA },
+        scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+      });
+      await auth.getClient();
+      return res.json({ ok:true, step:"authorize", method:"GoogleAuth+A(raw)", diag });
+    } catch (eA) {
+      // ダメなら keyB で
+      try {
+        const auth = new google.auth.GoogleAuth({
+          credentials: { client_email: email, private_key: keyB },
+          scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+        });
+        await auth.getClient();
+        return res.json({ ok:true, step:"authorize", method:"GoogleAuth+B(\\n->LF)", diag });
+      } catch (eB) {
+        return res.status(500).json({
+          ok:false, step:"authorize", errorA: eA?.message || String(eA), errorB: eB?.message || String(eB), diag
+        });
+      }
+    }
+  } catch (e) {
+    return res.status(500).json({ ok:false, step:"route", error: e?.message || String(e) });
+  }
 });
 
 
