@@ -1,0 +1,13 @@
+name: Weekly Broadcast
+on:
+  schedule:
+    - cron: "0 9 * * 5"  # JST 18:00
+  workflow_dispatch:
+jobs:
+  call:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -fsSL \
+            -H "x-job-token: ${{ secrets.JOB_TOKEN }}" \
+            "https://line-news-bot-7bh8.onrender.com/broadcast-weekly?to=all-groups"
