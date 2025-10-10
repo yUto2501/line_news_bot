@@ -1,7 +1,7 @@
 name: Weekly Broadcast
 on:
   schedule:
-    - cron: "0 12 * * 5"  # JST 19:00
+    - cron: "0 12 * * 5"      # JST 19:00（必要に応じて変更）
   workflow_dispatch:
 
 jobs:
@@ -12,35 +12,27 @@ jobs:
       JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
 
     steps:
-      - name: Warm up (wait for Render to wake)
+      - name: Warm up (wait until /health = 200)
         id: warm
         run: |
           echo "=== Warm-up start ==="
-          ATTEMPTS=0
-          while [ $ATTEMPTS -lt 10 ]; do
+          ok=false
+          for i in {1..15}; do
             CODE=$(curl -sS -m 20 -w "%{http_code}" -o /dev/null "$URL/health" || echo "000")
-            echo "Attempt $ATTEMPTS => $CODE"
-            if [ "$CODE" = "200" ]; then
-              echo "Server is awake."
-              echo "ok=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            ATTEMPTS=$((ATTEMPTS + 1))
+            echo "Attempt $i => $CODE"
+            if [ "$CODE" = "200" ]; then ok=true; break; fi
             sleep 10
           done
-          echo "Server did not wake up in time."
-          echo "ok=false" >> "$GITHUB_OUTPUT"
-          exit 1
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          echo "WARM_OK=$ok" >> $GITHUB_ENV
 
-      - name: Trigger broadcast (if warm-up OK)
-        if: steps.warm.outputs.ok == 'true'
+      - name: Trigger broadcast
+        if: env.WARM_OK == 'true'
         run: |
-          echo "=== Start broadcast ==="
           TARGET="$URL/broadcast-weekly?to=all-groups"
-          CODE=$(curl -sS -m 900 -H "x-job-token: $JOB_TOKEN" -w "%{http_code}" "$TARGET" -o resp.txt || echo "000")
-          echo "Broadcast response: $CODE"
-          cat resp.txt
-          if [ "$CODE" -lt 200 ] || [ "$CODE" -ge 300 ]; then
-            echo "Broadcast failed"
-            exit 1
-          fi
+          CODE=$(curl -sS -m 900 --retry 3 --retry-delay 6 --retry-all-errors \
+                 -H "x-job-token: $JOB_TOKEN" \
+                 -w "%{http_code}" "$TARGET" -o resp.txt || echo "000")
+          echo "Broadcast HTTP $CODE"
+          echo "--- body ---"; cat resp.txt || true; echo "-------------"
+          test "$CODE" -ge 200 -a "$CODE" -lt 300
