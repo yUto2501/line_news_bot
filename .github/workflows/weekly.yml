@@ -1,14 +1,31 @@
 name: Weekly Broadcast
 on:
   schedule:
-    - cron: "0 9 * * 5"  # JST 18:00
+    - cron: "0 9 * * 5"  # JST 19:00（UTC10:00）
   workflow_dispatch:
+
 jobs:
   call:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    env:
+      URL: https://line-news-bot-7bh8.onrender.com
+      JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
     steps:
-      - run: |
-          curl -fsSL \
-            -H "x-job-token: ${{ secrets.JOB_TOKEN }}" \
-            "https://line-news-bot-7bh8.onrender.com/broadcast-weekly?to=all-groups"
+      - name: Warm up (wake Render)
+        run: |
+          curl --retry 5 --retry-delay 5 --retry-all-errors \
+               -sS -m 60 -w "HTTP %{http_code}\n" "$URL/health" || true
+
+      - name: Trigger broadcast
+        run: |
+          TARGET="$URL/broadcast-weekly?to=all-groups"
+          # コールドスタート対策：最大5回リトライ
+          CODE=$(curl --retry 5 --retry-delay 6 --retry-all-errors \
+                -H "x-job-token: $JOB_TOKEN" \
+                -sS -m 120 -w "%{http_code}" "$TARGET" \
+                -o resp.txt || true)
+          echo "HTTP $CODE"
+          echo "--- body ---"; cat resp.txt || true; echo "-------------"
+          # 2xx 以外なら失敗扱い
+          [ "$CODE" -ge 200 ] && [ "$CODE" -lt 300 ]
