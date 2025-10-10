@@ -411,7 +411,7 @@ async function fetchGoogleNewsRSS() {
   const results = [];
 
   // 日本語（国内向け）そのまま
-  const qJP = '("高齢者" OR "介護" OR "在宅医療" OR "認知症") (AI OR "人工知能" OR "生成AI" OR "デジタルヘルス" OR "遠隔診療")';
+  const qJP = '("高齢者" OR "介護" OR "在宅医療" OR "認知症") (AI OR "人工知能" OR "生成AI" OR "デジタルヘルス" OR "遠隔診療" OR "DX" OR "データ分析")';
   const urlJP = `https://news.google.com/rss/search?q=${encodeURIComponent(qJP)}&hl=ja&gl=JP&ceid=JP:ja`;
 
   // 英語（海外向け）: allowlist を site: で束ねる
@@ -563,50 +563,141 @@ async function summarizeBatch(items) {
     const context = articleText || `${it.title}\n\n${it.snippet || ""}`; // フォールバック
 
     const prompt = `
-あなたは医療×AIの専門記者です。以下のニュース本文を事実ベースで要約してください。
-出力はJSONで返し、次のキーを含めます：
+あなたは医療分野におけるAIおよびITの専門記者です。以下のニュース本文を事実ベースで要約してください。
+出力はJSONのみで返し、次のキーを含めます：
 - jp_title: 20字以内の日本語見出し（煽らない・具体）
-- jp_summary: 120〜180字の日本語要約（固有名詞・具体数値を残し、誇張しない）
-- tags: 日本語タグを3〜5個（例: 介護現場, 転倒予防, 遠隔診療, 認知症ケア, 倫理・規制, データ利活用）
-- source, url, published_jst をそのまま含める
-
+- jp_summary: 120〜180字の日本語要約（固有名詞・具体数値は維持、誇張しない）
+- tags: 日本語タグ 0〜5個。各タグは1語（空白なし）・12文字以内。検索式や論理演算子（OR/AND/()/"、:、URL、site: 等）を含めない。条件を満たせない場合は [] を返す。
+- source: 記事配信元のドメインのみ（例: example.com / www.example.co.jp）。文章・タグ・URLは不可。
+- url: 記事URL
+- published_jst: 空でよい（後段で補完）
 本文（最大8000文字に整形済）:
 ${context}
+
 URL: ${it.link}
 SOURCE: ${it.source}
 PUBLISHED(ISO): ${it.iso}
 `.trim();
 
-const resp = await openai.responses.create({
-  model: "gpt-4o-mini",
-  input: [{ role: "user", content: prompt }],
-  temperature: 0.2,
-  // ← 重要：format は “文字列” ではなく “オブジェクト”
-  text: { format: { type: "json_object" } }
-});
+    // Responses API: スキーマ強制は text.format に記述（schema/name/strict は format 直下）
+    const resp = await openai.responses.create({
+      model: "gpt-4o-mini",
+      input: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "news_card",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              jp_title:   { type: "string", minLength: 1, maxLength: 40 },
+              jp_summary: { type: "string", minLength: 40, maxLength: 240 },
+              tags: {
+                type: "array",
+                minItems: 0,
+                maxItems: 5,
+                items: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: 12,
+                  // 空白なし・論理演算子/記号/URL禁止
+                  pattern: "^(?!.*\\b(?:OR|AND)\\b)(?!.*[()\"/:]|https?://)\\S+$"
+                }
+              },
+              source: { type: "string", pattern: "^[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$" },
+              url:    { type: "string", pattern: "^https?://.+" },
+              published_jst: { type: "string" }
+            },
+            // ← ここに published_jst を追加
+            required: ["jp_title","jp_summary","tags","source","url","published_jst"]
+          }
+        }
+      }
+    });
 
-let json = {};
-try {
-  const txt = resp.output_text ?? resp.output?.[0]?.content?.[0]?.text ?? "{}";
-  json = JSON.parse(txt);
-} catch {
-  json = {
-    jp_title: it.title.slice(0, 20),
-    jp_summary: (articleText || it.snippet || "").slice(0, 170),
-    tags: ["医療AI"],
-    source: it.source,
-    url: it.link,
-    published_jst: toJST(it.iso)
-  };
-}
+    let json = {};
+    try {
+      const txt = resp.output_text ?? resp.output?.[0]?.content?.[0]?.text ?? "{}";
+      json = JSON.parse(txt);
+    } catch {
+      // フォールバック（安全側）
+      json = {
+        jp_title: (it.title || "").slice(0, 20),
+        jp_summary: (articleText || it.snippet || "").slice(0, 170),
+        tags: [],
+        source: it.source,
+        url: it.link,
+        published_jst: toJST(it.iso)
+      };
+    }
 
-    json.source = json.source || it.source;
-    json.url = json.url || it.link;
-    json.published_jst = json.published_jst || toJST(it.iso);
+    // 最終バリデーション＆自動補正
+    json.url = isValidUrl(json.url) ? json.url : it.link;
+    json.source = fixSource(json.source, json.url, it.source);
+    json.tags = sanitizeTags(json.tags);
+    json.jp_title = (json.jp_title || it.title || "").slice(0, 40);
+    json.jp_summary = (json.jp_summary || it.snippet || "").slice(0, 240);
+    json.published_jst = toJST(it.iso);
+
     results.push(json);
   }
   return results;
 }
+
+// --- 補助関数 ---
+function isValidUrl(u) {
+  try { new URL(u); return true; } catch { return false; }
+}
+
+function domainFromUrl(u) {
+  try { return new URL(u).hostname; } catch { return ""; }
+}
+
+function looksLikeTags(s) {
+  if (!s || typeof s !== "string") return false;
+  const ban = /\b(?:OR|AND)\b|[()":]|https?:\/\//i;
+  return ban.test(s) || s.includes(" ");
+}
+
+function looksLikeSentence(s) {
+  return /[。．、，]/.test(s) || /\s{2,}/.test(s) || /^#/.test(s) || s.length > 60;
+}
+
+function fixSource(src, url, fallback) {
+  const domFromUrl = domainFromUrl(url);
+  if (!src || looksLikeTags(src) || looksLikeSentence(src)) {
+    return domFromUrl || fallback || "unknown";
+  }
+  if (/^https?:\/\//i.test(src)) return domainFromUrl(src) || domFromUrl || fallback || "unknown";
+  return src.split("/")[0];
+}
+
+function sanitizeTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  const ban = /(?:\bOR\b|\bAND\b|\(|\)|"|:|https?:\/\/)/i;
+  const out = [];
+  const seen = new Set();
+  for (let t of tags) {
+    t = String(t || "").trim();
+    if (!t) continue;
+    if (ban.test(t)) continue;
+    if (/\s/.test(t)) continue;       // 1語制約
+    if (t.length > 12) continue;
+    if (!seen.has(t)) { seen.add(t); out.push(t); }
+  }
+  return out.slice(0, 5);
+}
+
+
+
+
+
+
+
+
 
 
 function toJST(iso) {
