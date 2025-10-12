@@ -2,14 +2,10 @@ name: weekly-news
 
 on:
   schedule:
-    - cron: "20 8 * * 0"      # 17:20 JST 起動（boot）
-    - cron: "30-59/10 8 * * 0"# 17:30/40/50 JST キープアライブ（10分おき）
-    - cron: "0 9 * * 0"       # 18:00 JST 本番配信
+    - cron: "20 8 * * FRI"       # 17:20 JST 起動
+    - cron: "30-59/10 8 * * FRI" # 17:30/40/50 JST キープアライブ（10分おき）
+    - cron: "0 9 * * FRI"        # 18:00 JST 本番配信
   workflow_dispatch:
-
-env:
-  BASE_URL: ${{ secrets.BASE_URL }} # 例: https://line-news-bot-7bh8.onrender.com
-  TARGET_UTC: "09:00"               # 18:00 JST = 09:00 UTC（scheduledTimeに利用）
 
 jobs:
   at_1720_warmup:
@@ -19,7 +15,7 @@ jobs:
       - name: Warm-up (boot-check)
         run: |
           curl -sS --max-time 30 \
-            "$BASE_URL/render/boot-check?text=line-news-bot_booted!&scheduledTime=$TARGET_UTC"
+            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=line-news-bot_booted!&scheduledTime=09:00"
 
   keepalive_window:
     if: github.event.schedule == '30-59/10 8 * * FRI'
@@ -28,7 +24,7 @@ jobs:
       - name: Keepalive (every 10 min until 17:50)
         run: |
           curl -sS --max-time 20 \
-            "$BASE_URL/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=$TARGET_UTC"
+            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=09:00" || true
 
   at_1800_publish:
     if: github.event.schedule == '0 9 * * FRI'
@@ -37,17 +33,14 @@ jobs:
       - name: Wait until service is up (max 15 min)
         run: |
           deadline=$(( $(date -u +%s) + 15*60 ))  # 18:15 JST まで待機
-          ok=0
           while [ $(date -u +%s) -lt $deadline ]; do
             code=$(curl -s -o /dev/null -w '%{http_code}' \
-              "$BASE_URL/render/boot-check?text=preflight&scheduledTime=$TARGET_UTC")
-            if [ "$code" = "200" ]; then ok=1; break; fi
+              "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=preflight&scheduledTime=09:00")
+            [ "$code" = "200" ] && exit 0
             sleep 10
           done
-          if [ "$ok" != "1" ]; then
-            echo "Service not ready by deadline"; exit 1
-          fi
+          echo "Service not ready by deadline"; exit 1
       - name: Broadcast weekly (single shot)
         run: |
           curl -sS --fail \
-            "$BASE_URL/broadcast-weekly?to=all-groups"
+            "https://line-news-bot-7bh8.onrender.com/broadcast-weekly?to=all-groups"
