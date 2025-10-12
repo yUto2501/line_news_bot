@@ -2,9 +2,9 @@ name: weekly-news
 
 on:
   schedule:
-    - cron: "20 8 * * FRI"      # 17:20 JST 起動（boot）
-    - cron: "30-59/10 8 * * FRI"# 17:30/40/50 JST キープアライブ（10分おき）
-    - cron: "0 9 * * FRI"       # 18:00 JST 本番配信
+    - cron: "20 8 * * 0"      # 17:20 JST 起動（boot）
+    - cron: "30-59/10 8 * * 0"# 17:30/40/50 JST キープアライブ（10分おき）
+    - cron: "0 9 * * 0"       # 18:00 JST 本番配信
   workflow_dispatch:
 
 env:
