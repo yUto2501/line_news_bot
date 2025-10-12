@@ -11,43 +11,43 @@ on:
 
 jobs:
   at_1720_warmup:
-    if: github.event.schedule == '20 8 * * FRI' || github.event_name == 'workflow_dispatch'
+    if: github.event.schedule == '20 6 * * 0' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Warm-up (boot-check, 08:20 UTC)
         run: |
           curl -sS --max-time 30 \
-            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=line-news-bot_booted!&scheduledTime=09:30"
+            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=line-news-bot_booted!&scheduledTime=07:30"
 
   at_1730_keepalive:
-    if: github.event.schedule == '30 8 * * FRI'
+    if: github.event.schedule == '30 6 * * 0'
     runs-on: ubuntu-latest
     steps:
       - name: Keepalive (08:30 UTC)
         run: |
           curl -sS --max-time 20 \
-            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=08:30" || true
+            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=06:30" || true
 
   at_1740_keepalive:
-    if: github.event.schedule == '40 8 * * FRI'
+    if: github.event.schedule == '40 6 * * 0'
     runs-on: ubuntu-latest
     steps:
       - name: Keepalive (08:40 UTC)
         run: |
           curl -sS --max-time 20 \
-            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=08:40" || true
+            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=06:40" || true
 
   at_1750_keepalive:
-    if: github.event.schedule == '50 8 * * FRI'
+    if: github.event.schedule == '50 6 * * 0'
     runs-on: ubuntu-latest
     steps:
       - name: Keepalive (08:50 UTC)
         run: |
           curl -sS --max-time 20 \
-            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=08:50" || true
+            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=06:50" || true
 
   at_1800_publish:
-    if: github.event.schedule == '0 9 * * FRI'
+    if: github.event.schedule == '0 7 * * 0'
     runs-on: ubuntu-latest
     steps:
       - name: Wait until service is up (preflight=09:00 UTC, max 15 min)
@@ -55,7 +55,7 @@ jobs:
           deadline=$(( $(date -u +%s) + 15*60 ))  # 18:15 JST まで待機
           while [ $(date -u +%s) -lt $deadline ]; do
             code=$(curl -s -o /dev/null -w '%{http_code}' \
-              "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=preflight&scheduledTime=09:00")
+              "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=preflight&scheduledTime=07:00")
             [ "$code" = "200" ] && exit 0
             sleep 10
           done
