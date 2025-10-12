@@ -2,9 +2,11 @@ name: weekly-news
 
 on:
   schedule:
-    - cron: "20 8 * * FRI"       # 17:20 JST 起動
-    - cron: "30-59/10 8 * * FRI" # 17:30/40/50 JST キープアライブ（10分おき）
-    - cron: "0 9 * * FRI"        # 18:00 JST 本番配信
+    - cron: "20 8 * * 0"  # 17:20 JST 起動
+    - cron: "30 8 * * 0"  # 17:30 JST keepalive
+    - cron: "40 8 * * 0"  # 17:40 JST keepalive
+    - cron: "50 8 * * 0"  # 17:50 JST keepalive
+    - cron: "0 9 * * 0"   # 18:00 JST 本番配信
   workflow_dispatch:
 
 jobs:
@@ -12,25 +14,43 @@ jobs:
     if: github.event.schedule == '20 8 * * FRI' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - name: Warm-up (boot-check)
+      - name: Warm-up (boot-check, 08:20 UTC)
         run: |
           curl -sS --max-time 30 \
-            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=line-news-bot_booted!&scheduledTime=09:00"
+            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=line-news-bot_booted!&scheduledTime=09:30"
 
-  keepalive_window:
-    if: github.event.schedule == '30-59/10 8 * * FRI'
+  at_1730_keepalive:
+    if: github.event.schedule == '30 8 * * FRI'
     runs-on: ubuntu-latest
     steps:
-      - name: Keepalive (every 10 min until 17:50)
+      - name: Keepalive (08:30 UTC)
         run: |
           curl -sS --max-time 20 \
-            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=09:00" || true
+            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=08:30" || true
+
+  at_1740_keepalive:
+    if: github.event.schedule == '40 8 * * FRI'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keepalive (08:40 UTC)
+        run: |
+          curl -sS --max-time 20 \
+            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=08:40" || true
+
+  at_1750_keepalive:
+    if: github.event.schedule == '50 8 * * FRI'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keepalive (08:50 UTC)
+        run: |
+          curl -sS --max-time 20 \
+            "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=08:50" || true
 
   at_1800_publish:
     if: github.event.schedule == '0 9 * * FRI'
     runs-on: ubuntu-latest
     steps:
-      - name: Wait until service is up (max 15 min)
+      - name: Wait until service is up (preflight=09:00 UTC, max 15 min)
         run: |
           deadline=$(( $(date -u +%s) + 15*60 ))  # 18:15 JST まで待機
           while [ $(date -u +%s) -lt $deadline ]; do
@@ -40,7 +60,7 @@ jobs:
             sleep 10
           done
           echo "Service not ready by deadline"; exit 1
-      - name: Broadcast weekly (single shot)
+      - name: Broadcast weekly (to=all-groups)
         run: |
           curl -sS --fail \
             "https://line-news-bot-7bh8.onrender.com/broadcast-weekly?to=all-groups"
