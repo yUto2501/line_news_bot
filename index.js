@@ -19,6 +19,9 @@ const SPREADSHEET_ID = process.env.SHEETS_SPREADSHEET_ID;
 const SHEET_NAME     = process.env.SHEETS_SHEET_NAME || "groups";
 const SA_EMAIL       = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
 const SA_PRIVATE_KEY = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || ""
+const USER_SHEET_NAME = process.env.USER_SHEET_NAME || "users";
+const LINE_TEXT_LIMIT = 2000;
+const EDITOR_ID = process.env.EDITOR_ID;
 
 if (!SPREADSHEET_ID || !SA_EMAIL || !SA_PRIVATE_KEY) {
   console.warn("[GroupsStore] Sheets の環境変数が未設定です。保存は無効になります。");
@@ -49,49 +52,54 @@ async function getSheets() {
   return google.sheets({ version: "v4", auth });
 }
 
+// 既存: getSheets はそのまま使えます
+
+// ☆ 修正：groupタブの行取得（E列まで取得して groupName を読む）
+// A2:E を読む（E = GroupName）
 async function readAllRows() {
   const api = await getSheets();
-  if (!api) return [];
   const r = await api.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A2:D`,
+    range: `${SHEET_NAME}!A2:E`,
   });
   const rows = r.data.values || [];
-  return rows
-    .filter(row => row[0])
-    .map(row => ({
-      id: row[0],
-      type: row[1] || "unknown",
-      lastSeen: row[2] || "",
-      isDefault: (row[3] || "").toString().toLowerCase() === "true",
-    }));
+  return rows.filter(r => r[0]).map(r => ({
+    id: r[0],
+    type: r[1] || "unknown",
+    lastSeen: r[2] || "",
+    isDefault: (r[3] || "").toString().toLowerCase() === "true",
+    groupName: r[4] || "",
+  }));
 }
 
-async function upsertRow(id, type, lastSeenIso) {
+// ★常に groupName を上書き（既存の保持はしない）。isDefault は据え置き。
+async function upsertRow(id, type, lastSeenIso, groupName) {
   const api = await getSheets();
-  if (!api) return;
   const rows = await readAllRows();
   const idx = rows.findIndex(r => r.id === id);
+
   if (idx >= 0) {
-    // update
-    const rowNum = idx + 2; // 1-based + header
+    const rowNum = idx + 2;
+    const prev = rows[idx];
     await api.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A${rowNum}:C${rowNum}`,
+      range: `${SHEET_NAME}!A${rowNum}:E${rowNum}`,
       valueInputOption: "RAW",
-      requestBody: { values: [[id, type, lastSeenIso]] },
+      requestBody: {
+        values: [[id, type || prev.type, lastSeenIso, prev.isDefault ? "TRUE" : "FALSE", groupName || ""]]
+      },
     });
   } else {
-    // append
     await api.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A:D`,
+      range: `${SHEET_NAME}!A:E`,
       valueInputOption: "RAW",
       insertDataOption: "INSERT_ROWS",
-      requestBody: { values: [[id, type, lastSeenIso, "FALSE"]] },
+      requestBody: { values: [[id, type || "unknown", lastSeenIso, "FALSE", groupName || ""]] },
     });
   }
 }
+
 
 async function setDefaultRow(id) {
   const api = await getSheets();
@@ -127,6 +135,52 @@ async function setDefaultRow(id) {
     });
   }
 }
+// getSheets は既存のままでOK
+// readAllRows, upsertRow も既存のグループ管理用としてそのまま
+
+// ▼ userタブを読む
+// 読み出し（A:userID B:type C:lastSeen D:userName）
+async function readAllUsers() {
+  const api = await getSheets();
+  const r = await api.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${USER_SHEET_NAME}!A2:D`,
+  });
+  const rows = r.data.values || [];
+  return rows.filter(r => r[0]).map(r => ({
+    userId: r[0],
+    type: r[1] || "unknown",
+    lastSeen: r[2] || "",
+    userName: r[3] || "",
+  }));
+}
+
+// ★常に userName を上書き（既存の保持はしない）
+async function upsertUserRow(userId, type, lastSeenIso, userName) {
+  if (!userId) return;
+  const api = await getSheets();
+  const rows = await readAllUsers();
+  const idx = rows.findIndex(r => r.userId === userId);
+
+  if (idx >= 0) {
+    const rowNum = idx + 2;
+    await api.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${USER_SHEET_NAME}!A${rowNum}:D${rowNum}`,
+      valueInputOption: "RAW",
+      requestBody: { values: [[userId, type || rows[idx].type, lastSeenIso, userName || ""]] },
+    });
+  } else {
+    await api.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${USER_SHEET_NAME}!A:D`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values: [[userId, type || "unknown", lastSeenIso, userName || ""]] },
+    });
+  }
+}
+
 
 
 
@@ -163,6 +217,68 @@ async function getAllGroupIds() {
   }
 }
 
+// --- userタブ upsert ---
+async function upsertUserProfileRow(userId, displayName, lastSeenIso, note = "") {
+  if (!userId) return;
+  const api = await getSheets();
+  const r = await api.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${USER_SHEET_NAME}!A2:D`,
+  });
+  const rows = (r.data.values || []).map(row => ({ userId: row[0], displayName: row[1] || "", lastSeen: row[2] || "", note: row[3] || "" }));
+  const idx = rows.findIndex(u => u.userId === userId);
+  const values = [[userId, displayName || "", lastSeenIso, note || ""]];
+
+  if (idx >= 0) {
+    const rowNum = idx + 2;
+    await api.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${USER_SHEET_NAME}!A${rowNum}:D${rowNum}`,
+      valueInputOption: "RAW",
+      requestBody: { values },
+    });
+  } else {
+    await api.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${USER_SHEET_NAME}!A:D`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values },
+    });
+  }
+}
+
+// --- groupタブ upsert ---
+async function upsertGroupProfileRow(groupId, groupName, lastSeenIso, pictureUrl = "") {
+  if (!groupId) return;
+  const api = await getSheets();
+  const r = await api.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${GROUP_SHEET_NAME}!A2:D`,
+  });
+  const rows = (r.data.values || []).map(row => ({ groupId: row[0], groupName: row[1] || "", lastSeen: row[2] || "", pictureUrl: row[3] || "" }));
+  const idx = rows.findIndex(g => g.groupId === groupId);
+  const values = [[groupId, groupName || "", lastSeenIso, pictureUrl || ""]];
+
+  if (idx >= 0) {
+    const rowNum = idx + 2;
+    await api.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${GROUP_SHEET_NAME}!A${rowNum}:D${rowNum}`,
+      valueInputOption: "RAW",
+      requestBody: { values },
+    });
+  } else {
+    await api.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${GROUP_SHEET_NAME}!A:D`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values },
+    });
+  }
+}
+
 
 
 
@@ -177,6 +293,8 @@ function loadStore() {
 function saveStore(store) {
   fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), "utf-8");
 }
+// 追加: 簡易ロガー
+
 async function rememberSource(ev) {
   try {
     const src = ev?.source?.type;
@@ -184,17 +302,60 @@ async function rememberSource(ev) {
     if (src === "group") id = ev.source.groupId;
     else if (src === "room") id = ev.source.roomId;
     else if (src === "user") id = ev.source.userId;
-    if (!id) return;
-    await upsertRow(id, src, new Date(ev.timestamp || Date.now()).toISOString());
-    const rows = await readAllRows();
-    const hasDefault = rows.some(r => r.isDefault);
-    if (!hasDefault && (src === "group" || src === "room")) {
-      await setDefaultRow(id);
+
+    const tsIso = new Date(ev?.timestamp || Date.now()).toISOString();
+
+    // --- GroupName ---
+    let groupName = "";
+    if (src === "group" && ev.source.groupId) {
+      try {
+        const summary = await client.getGroupSummary(ev.source.groupId);
+        groupName = summary?.groupName || "取得失敗";
+      } catch (e) {
+        groupName = "取得失敗";
+      }
+    } else if (src === "room") {
+      groupName = "取得失敗"; // 仕様上なし
+    }
+
+    // --- UserName ---
+    let userName = "";
+    const userId = ev?.source?.userId || null;
+    if (userId) {
+      try {
+        if (src === "group" && ev.source.groupId) {
+          const prof = await client.getGroupMemberProfile(ev.source.groupId, userId);
+          userName = prof?.displayName || "取得失敗";
+        } else if (src === "room" && ev.source.roomId) {
+          const prof = await client.getRoomMemberProfile(ev.source.roomId, userId);
+          userName = prof?.displayName || "取得失敗";
+        } else {
+          const prof = await client.getProfile(userId);
+          userName = prof?.displayName || "取得失敗";
+        }
+      } catch (e) {
+        userName = "取得失敗";
+      }
+    }
+
+    // --- 書き込み（既存を潰してOK方針）
+    if (id)     await upsertRow(id, src, tsIso, groupName);
+    if (userId) await upsertUserRow(userId, src, tsIso, userName);
+
+    // 既定設定はそのまま
+    if (id && (src === "group" || src === "room")) {
+      const rows = await readAllRows();
+      if (!rows.some(r => r.isDefault)) await setDefaultRow(id);
     }
   } catch (e) {
     console.error("[GroupsStore] rememberSource error:", e?.message || e);
   }
 }
+
+
+
+
+
 
 async function getDefaultTo() {
   const envTo = process.env.TEST_GROUP_ID || process.env.DEFAULT_TO;
@@ -305,6 +466,7 @@ function decideDomestic(item) {
 
 const parser = new Parser();
 const { Client } = line;
+const client = new Client({ channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN });
 
 const {
   LINE_CHANNEL_ACCESS_TOKEN,
@@ -818,77 +980,15 @@ app.get("/broadcast-weekly", async (req, res) => {
   }
 });
 
-
-
-
-// OpenAI 疎通確認: http://localhost:8080/debug/openai
-app.get("/debug/openai", async (_req, res) => {
-  try {
-    const r = await openai.responses.create({
-      // まずは通りやすいモデルに
-      model: "gpt-4o-mini",
-      input: "返答は「ok」だけ。"
-    });
-    res.json({ ok: true, output: r.output_text });
-  } catch (e) {
-    res.status(500).json({
-      ok: false,
-      status: e?.status,
-      error: e?.message,
-      detail: e?.response?.data || null
-    });
-  }
-});
-
 // 受信イベントを丸ごとログって groupId/roomId を取得
 app.post("/webhook", express.json(), async (req, res) => {
   const events = req.body?.events || [];
-  res.send("ok"); // 先に応答
-  for (const ev of events) {
-    await rememberSource(ev); // ★ Sheets に記録
-    //if (ev.type === "message" && ev.message?.type === "text") {
-      //try {
-      //  await lineClient.replyMessage(ev.replyToken, {
-      //    type: "text",
-      //    text: `受け取りました: 「${ev.message.text}」`
-      //  });
-      //} catch (e) {
-      //  console.error("reply error:", e?.statusCode, e?.body || e?.message);
-    //  }
-    //}
-  }
-});
+  // 1秒だけは待つ（それ以上は待たずに返す）
+  const run = Promise.allSettled(events.map(ev => rememberSource(ev)));
+  const timeout = new Promise(resolve => setTimeout(resolve, 1000)); // 1s
 
-
-
-// LINE Push 単体テスト: http://localhost:8080/debug/line-push?to=Uxxxxxxxx...
-app.get("/debug/line-push", async (req, res) => {
-  try {
-    const { to } = req.query;
-    if (!to) return res.status(400).json({ ok: false, error: "query 'to' is required" });
-    await lineClient.pushMessage(to, { type: "text", text: "LINE push ok" });
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e?.body || String(e) });
-  }
-});
-
-// 収集状況を可視化：?n=5 で各カテゴリ上位N件のタイトルを返す
-app.get("/debug/collect", async (req, res) => {
-  try {
-    const n = Math.max(1, Math.min(20, parseInt(req.query.n || "5", 10)));
-    const { domestic, overseas } = await collectPicks();
-    res.json({
-      ok: true,
-      since_iso: SINCE.toISOString(),
-      domestic_count: domestic.length,
-      overseas_count: overseas.length,
-      domestic_samples: domestic.slice(0, n).map(a => ({ title: a.title, source: a.source, link: a.link })),
-      overseas_samples: overseas.slice(0, n).map(a => ({ title: a.title, source: a.source, link: a.link }))
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e?.message || String(e) });
-  }
+  await Promise.race([run, timeout]); // 1秒経ったら返す
+  res.status(200).send("ok");
 });
 
 app.get("/groups", async (_req, res) => {
@@ -917,85 +1017,86 @@ app.post("/groups/default", express.json(), async (req, res) => {
   res.json({ ok: true, defaultTo: to });
 });
 
-app.get("/debug/sheets", async (_req, res) => {
+// 追加：HH:mm を「今日の UTC」として解釈してミリ秒に
+function parseScheduledHHmmUTC(q) {
+  if (q == null) return null;                 // 指定なし
+  const s = String(q).trim();
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(s);
+  if (!m) return NaN;                         // 形式エラー
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  const now = new Date();                     // 現在
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm, 0, 0);
+}
+
+app.get("/render/boot-check", async (req, res) => {
   try {
-    const s = await getSheets(); // 上でauthorize実行済みの関数
-    if (!s) return res.status(500).json({ ok:false, error:"auth/init failed. Check server logs." });
-    const r = await s.spreadsheets.values.get({
-      spreadsheetId: process.env.SHEETS_SPREADSHEET_ID,
-      range: `${process.env.SHEETS_SHEET_NAME || "groups"}!A1:D2`,
-    });
-    res.json({ ok:true, values: r.data.values || [] });
-  } catch (e) {
-    res.status(500).json({ ok:false, error: e?.message || String(e) });
-  }
-});
-
-// ── 追記：環境変数と鍵の整形を可視化
-app.get("/debug/sheets-env", (_req, res) => {
-  const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || "";
-  const repaired = rawKey.replace(/\\n/g, "\n");
-  const hasBegin = repaired.startsWith("-----BEGIN PRIVATE KEY-----");
-  const hasEnd   = repaired.trim().endsWith("-----END PRIVATE KEY-----");
-  res.json({
-    ok: true,
-    SHEETS_SPREADSHEET_ID: process.env.SHEETS_SPREADSHEET_ID || null,
-    GOOGLE_SERVICE_ACCOUNT_EMAIL: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || null,
-    KEY_present: !!rawKey,
-    KEY_has_BEGIN: hasBegin,
-    KEY_has_END: hasEnd,
-    KEY_starts_with_charCode: repaired.charCodeAt(0) || null, // 45('-')であるべき
-    note: "KEY はレスポンスに含めません（安全のため）。BEGIN/END 判定だけ返しています。"
-  });
-});
-
-
-
-app.get("/debug/sheets-auth", async (_req, res) => {
-  try {
-    const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
-    const raw   = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || "";
-    // ローカルが“実改行”なら raw のまま、Render の \n の場合は下の行で置換して試す
-    const keyA  = raw;                       // 実改行想定
-    const keyB  = raw.replace(/\\n/g, "\n"); // \n→改行想定
-
-    const diag = {
-      email,
-      raw_len: raw.length,
-      A_has_BEGIN: keyA.startsWith("-----BEGIN PRIVATE KEY-----"),
-      B_has_BEGIN: keyB.startsWith("-----BEGIN PRIVATE KEY-----"),
-    };
-    if (!email || !raw) {
-      return res.status(500).json({ ok:false, step:"env", error:"missing email or key", diag });
+    if (!EDITOR_ID) {
+      return res.status(500).json({ ok:false, error:"EDITOR_ID is not set" });
     }
 
-    // まず GoogleAuth + keyA で試す
-    try {
-      const auth = new google.auth.GoogleAuth({
-        credentials: { client_email: email, private_key: keyA },
-        scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-      });
-      await auth.getClient();
-      return res.json({ ok:true, step:"authorize", method:"GoogleAuth+A(raw)", diag });
-    } catch (eA) {
-      // ダメなら keyB で
-      try {
-        const auth = new google.auth.GoogleAuth({
-          credentials: { client_email: email, private_key: keyB },
-          scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-        });
-        await auth.getClient();
-        return res.json({ ok:true, step:"authorize", method:"GoogleAuth+B(\\n->LF)", diag });
-      } catch (eB) {
-        return res.status(500).json({
-          ok:false, step:"authorize", errorA: eA?.message || String(eA), errorB: eB?.message || String(eB), diag
-        });
+    const doSend   = String(req.query.send ?? "1") !== "0";
+    const kind     = String(req.query.type ?? "text").toLowerCase();
+    let   text     = String(req.query.text ?? "起動しました");
+    if (text.length > LINE_TEXT_LIMIT) text = text.slice(0, LINE_TEXT_LIMIT);
+    const prefix   = req.query.prefix ? String(req.query.prefix) : "";
+    const suffix   = req.query.suffix ? String(req.query.suffix) : "";
+    const finalText = `${prefix}${text}${suffix}`;
+
+    // scheduledTime は HH:mm（UTC）
+    const scheduledMs = parseScheduledHHmmUTC(req.query.scheduledTime);
+    if (req.query.scheduledTime && (scheduledMs === null || Number.isNaN(scheduledMs))) {
+      return res.status(400).json({ ok:false, error:"scheduledTime must be HH:mm in UTC (e.g., 09:30)" });
+    }
+    const nowMsUtc = Date.now();
+    const scheduledPassed = scheduledMs != null && !Number.isNaN(scheduledMs) && nowMsUtc > scheduledMs;
+
+    // メッセージ生成（テキスト or ステッカー）
+    let messages;
+    if (kind === "sticker") {
+      const pkg = String(req.query.pkg ?? "");
+      const id  = String(req.query.id ?? "");
+      if (!pkg || !id) {
+        return res.status(400).json({ ok:false, error:"sticker requires ?pkg=<packageId>&id=<stickerId>" });
       }
+      messages = [{ type: "sticker", packageId: pkg, stickerId: id }];
+    } else {
+      messages = [{ type: "text", text: finalText }];
     }
+
+    let sent = 0;
+    if (doSend && !scheduledPassed) {
+      // ★ 429対策なし：そのまま送信
+      await lineClient.pushMessage(EDITOR_ID, messages);
+      sent = 1;
+    }
+
+    return res.json({
+      ok: true,
+      sent,
+      suppressedBySchedule: doSend && scheduledPassed ? 1 : 0,
+      scheduledTimeInput: req.query.scheduledTime ?? null,
+      scheduledTimeUtcIso: (scheduledMs != null && !Number.isNaN(scheduledMs)) ? new Date(scheduledMs).toISOString() : null,
+      nowUtcIso: new Date(nowMsUtc).toISOString(),
+      target: EDITOR_ID,
+      type: messages[0].type,
+      messagePreview: messages[0].type === "text" ? messages[0].text : messages[0],
+    });
   } catch (e) {
-    return res.status(500).json({ ok:false, step:"route", error: e?.message || String(e) });
+    const status = e?.statusCode || e?.response?.status || 500;
+    const headers = e?.response?.headers || {};
+    res.status(status).json({
+      ok: false,
+      error: e?.message || String(e),  // ← エラーは表示
+      status,
+      requestId: headers["x-line-request-id"],
+    });
   }
 });
+
+
+
+
 
 app.get("/health", (req, res) => {
   res.status(200).send("ok");

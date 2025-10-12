@@ -1,38 +1,53 @@
-name: Weekly Broadcast
+name: weekly-news
+
 on:
   schedule:
-    - cron: "22 22 * * *" 
+    - cron: "20 8 * * FRI"      # 17:20 JST 起動（boot）
+    - cron: "30-59/10 8 * * FRI"# 17:30/40/50 JST キープアライブ（10分おき）
+    - cron: "0 9 * * FRI"       # 18:00 JST 本番配信
   workflow_dispatch:
 
-jobs:
-  call:
-    runs-on: ubuntu-latest
-    env:
-      URL: https://line-news-bot-7bh8.onrender.com
-      JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
+env:
+  BASE_URL: ${{ secrets.BASE_URL }} # 例: https://line-news-bot-7bh8.onrender.com
+  TARGET_UTC: "09:00"               # 18:00 JST = 09:00 UTC（scheduledTimeに利用）
 
+jobs:
+  at_1720_warmup:
+    if: github.event.schedule == '20 8 * * FRI' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
     steps:
-      - name: Warm up (wait until /health = 200)
-        id: warm
+      - name: Warm-up (boot-check)
         run: |
-          echo "=== Warm-up start ==="
-          ok=false
-          for i in {1..15}; do
-            CODE=$(curl -sS -m 20 -w "%{http_code}" -o /dev/null "$URL/health" || echo "000")
-            echo "Attempt $i => $CODE"
-            if [ "$CODE" = "200" ]; then ok=true; break; fi
+          curl -sS --max-time 30 \
+            "$BASE_URL/render/boot-check?text=line-news-bot_booted!&scheduledTime=$TARGET_UTC"
+
+  keepalive_window:
+    if: github.event.schedule == '30-59/10 8 * * FRI'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keepalive (every 10 min until 17:50)
+        run: |
+          curl -sS --max-time 20 \
+            "$BASE_URL/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=$TARGET_UTC"
+
+  at_1800_publish:
+    if: github.event.schedule == '0 9 * * FRI'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait until service is up (max 15 min)
+        run: |
+          deadline=$(( $(date -u +%s) + 15*60 ))  # 18:15 JST まで待機
+          ok=0
+          while [ $(date -u +%s) -lt $deadline ]; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              "$BASE_URL/render/boot-check?text=preflight&scheduledTime=$TARGET_UTC")
+            if [ "$code" = "200" ]; then ok=1; break; fi
             sleep 10
           done
-          echo "ok=$ok" >> "$GITHUB_OUTPUT"
-          echo "WARM_OK=$ok" >> $GITHUB_ENV
-
-      - name: Trigger broadcast
-        if: env.WARM_OK == 'true'
+          if [ "$ok" != "1" ]; then
+            echo "Service not ready by deadline"; exit 1
+          fi
+      - name: Broadcast weekly (single shot)
         run: |
-          TARGET="$URL/broadcast-weekly?to=all-groups"
-          CODE=$(curl -sS -m 900 --retry 3 --retry-delay 6 --retry-all-errors \
-                 -H "x-job-token: $JOB_TOKEN" \
-                 -w "%{http_code}" "$TARGET" -o resp.txt || echo "000")
-          echo "Broadcast HTTP $CODE"
-          echo "--- body ---"; cat resp.txt || true; echo "-------------"
-          test "$CODE" -ge 200 -a "$CODE" -lt 300
+          curl -sS --fail \
+            "$BASE_URL/broadcast-weekly?to=all-groups"
