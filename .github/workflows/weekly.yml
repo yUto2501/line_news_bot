@@ -2,16 +2,16 @@ name: weekly-news
 
 on:
   schedule:
-    - cron: "20 6 * * 0"  # 17:20 JST 起動
-    - cron: "30 6 * * 0"  # 17:30 JST keepalive
-    - cron: "40 6 * * 0"  # 17:40 JST keepalive
-    - cron: "50 6 * * 0"  # 17:50 JST keepalive
-    - cron: "0 7 * * 0"   # 18:00 JST 本番配信
+    - cron: "20 6  * * 5"  # 起動
+    - cron: "30 6  * * 5"  # keepalive
+    - cron: "40 6  * * 5"  # keepalive
+    - cron: "50 6  * * 5"  # keepalive
+    - cron: "0 7  * * 5"   # 本番配信
   workflow_dispatch:
 
 jobs:
   at_1720_warmup:
-    if: github.event.schedule == '20 6 * * 0' || github.event_name == 'workflow_dispatch'
+    if: github.event.schedule == '20 6  * * 5' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Warm-up (boot-check, 08:20 UTC)
@@ -20,7 +20,7 @@ jobs:
             "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=line-news-bot_booted!&scheduledTime=07:30"
 
   at_1730_keepalive:
-    if: github.event.schedule == '30 6 * * 0'
+    if: github.event.schedule == '30 6  * * 5'
     runs-on: ubuntu-latest
     steps:
       - name: Keepalive (08:30 UTC)
@@ -29,7 +29,7 @@ jobs:
             "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=06:30" || true
 
   at_1740_keepalive:
-    if: github.event.schedule == '40 6 * * 0'
+    if: github.event.schedule == '40 6  * * 5'
     runs-on: ubuntu-latest
     steps:
       - name: Keepalive (08:40 UTC)
@@ -38,7 +38,7 @@ jobs:
             "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=06:40" || true
 
   at_1750_keepalive:
-    if: github.event.schedule == '50 6 * * 0'
+    if: github.event.schedule == '50 6  * * 5'
     runs-on: ubuntu-latest
     steps:
       - name: Keepalive (08:50 UTC)
@@ -47,7 +47,7 @@ jobs:
             "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=06:50" || true
 
   at_1800_publish:
-    if: github.event.schedule == '0 7 * * 0'
+    if: github.event.schedule == '0 7  * * 5'
     runs-on: ubuntu-latest
     steps:
       - name: Wait until service is up (preflight=09:00 UTC, max 15 min)
