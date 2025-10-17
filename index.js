@@ -352,11 +352,6 @@ async function rememberSource(ev) {
   }
 }
 
-
-
-
-
-
 async function getDefaultTo() {
   const envTo = process.env.TEST_GROUP_ID || process.env.DEFAULT_TO;
   if (envTo) return envTo;
@@ -738,7 +733,7 @@ async function summarizeBatch(items) {
 ${context}
 
 URL: ${it.link}
-SOURCE: ${it.source}
+Page SOURCE: ${it.source}
 PUBLISHED(ISO): ${it.iso}
 `.trim();
 
@@ -871,33 +866,71 @@ function toJST(iso) {
 }
 
 // Flex Message（カルーセル）生成
+// 文字数をざっくり安全側に切る
+const clamp = (s = "", n = 400) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
+// 簡易URLバリデーション
+const hasValidUrl = (u) => {
+  try { const x = new URL(u); return x.protocol === "http:" || x.protocol === "https:"; }
+  catch { return false; }
+};
+
+// Flex Message（カルーセル）生成（安全化）
 function buildFlex(title, items) {
-  const bubbles = items.map(it => ({
-    type: "bubble",
-    size: "kilo",
-    body: {
-      type: "box",
-      layout: "vertical",
-      spacing: "sm",
-      contents: [
-        { type: "text", text: it.jp_title || it.title, weight: "bold", size: "md", wrap: true },
-        { type: "text", text: it.jp_summary || "", size: "sm", wrap: true },
-        { type: "text", text: `出典: ${it.source} / ${it.published_jst}`, size: "xs", color: "#888888", wrap: true },
-      ],
-    },
-    footer: {
-      type: "box",
-      layout: "vertical",
-      contents: [
-        ...(it.tags ? [{ type: "text", text: `#${(it.tags||[]).join(" #")}`, size: "xs", color: "#666666", wrap: true }] : []),
-        { type: "button", style: "link", action: { type: "uri", label: "続きを読む", uri: it.url } }
-      ]
+  if (!Array.isArray(items) || items.length === 0) return null;         // ★ 空は返さない
+  const list = items.slice(0, 12);                                      // ★ 上限 12
+
+  const bubbles = list.map((it) => {
+    const t = clamp(it.jp_title || it.title || "（無題）", 120);        // 見出しは短め
+    const sum = clamp(it.jp_summary || "", 500);
+    const source = clamp(
+      `出典: ${it.source || "N/A"} / ${it.published_jst || "—"}`,
+      200
+    );
+
+    const footerContents = [];
+    if (it.tags && it.tags.length) {
+      footerContents.push({
+        type: "text",
+        text: `#${it.tags.join(" #")}`,
+        size: "xs",
+        color: "#666666",
+        wrap: true
+      });
     }
-  }));
+    if (hasValidUrl(it.url)) {
+      footerContents.push({
+        type: "button",
+        style: "link",
+        action: { type: "uri", label: "続きを読む", uri: it.url }
+      });
+    }
+
+    return {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          { type: "text", text: t, weight: "bold", size: "md", wrap: true },
+          ...(sum ? [{ type: "text", text: sum, size: "sm", wrap: true }] : []),
+          { type: "text", text: source, size: "xs", color: "#888888", wrap: true }
+        ]
+      },
+      ...(footerContents.length
+        ? { footer: { type: "box", layout: "vertical", contents: footerContents } }
+        : {})
+    };
+  });
+
+  // 念のため、生成後も空でないことを確認
+  if (!bubbles.length) return null;
 
   return {
     type: "flex",
-    altText: title,
+    altText: `${title} ${bubbles.length}件`,                           // ★ 件数を反映
     contents: { type: "carousel", contents: bubbles }
   };
 }
@@ -941,7 +974,7 @@ app.get("/test-message", async (req, res) => {
 // ---- エンドポイント ----
 app.get("/broadcast-weekly", async (req, res) => {
   try {
-    // 宛先解決
+    // 宛先解決f
     let targets = [];
     const toParam = req.query.to;
     if (toParam === "all-groups") {
