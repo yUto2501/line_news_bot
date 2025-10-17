@@ -47,7 +47,7 @@ jobs:
             "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=06:50" || true
 
   at_1800_publish:
-    if: github.event.schedule == '03 6  * * 5'
+    if: github.event.schedule == '03 6  * * 5' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Wait until service is up (preflight=09:00 UTC, max 15 min)
