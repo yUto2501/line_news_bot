@@ -5,8 +5,8 @@ on:
     - cron: "20 6  * * 5"  # 起動
     - cron: "30 6  * * 5"  # keepalive
     - cron: "40 6  * * 5"  # keepalive
-    - cron: "50 6  * * 5"  # keepalive
-    - cron: "0 7  * * 5"   # 本番配信
+    - cron: "36 5  * * 5"  # keepalive
+    - cron: "37 5  * * 5"   # 本番配信
   workflow_dispatch:
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
             "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=06:40" || true
 
   at_1750_keepalive:
-    if: github.event.schedule == '50 6  * * 5'
+    if: github.event.schedule == '36 5  * * 5'
     runs-on: ubuntu-latest
     steps:
       - name: Keepalive (08:50 UTC)
@@ -47,7 +47,7 @@ jobs:
             "https://line-news-bot-7bh8.onrender.com/render/boot-check?text=waiting_until_the_scheduled_time&scheduledTime=06:50" || true
 
   at_1800_publish:
-    if: github.event.schedule == '0 7  * * 5'
+    if: github.event.schedule == '37 5  * * 5'
     runs-on: ubuntu-latest
     steps:
       - name: Wait until service is up (preflight=09:00 UTC, max 15 min)
